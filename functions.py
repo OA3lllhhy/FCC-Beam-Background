@@ -11,9 +11,18 @@ import mplhep as hep
 import pickle
 import os
 from mpl_toolkits.mplot3d import Axes3D
-import numpy as np
 from scipy.optimize import leastsq
 import random
+from tqdm import tqdm
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.utils.data import DataLoader, TensorDataset
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import (
+    roc_auc_score, roc_curve, confusion_matrix,
+    classification_report
+)
 
 hep.style.use(hep.style.ROOT)
 
@@ -743,13 +752,14 @@ def cellid_to_group(cellID):
 
 def get_features_and_labels(signal_data, background_data, epsilon=1e-6, max_samples=None):
     def transform(row):
-        z, rows, mult, edep, _, cos, _, _, _ = row
+        z, rows, mult, edep, _, cos, _, _, _, cross_B = row
         return (
             math.log(z + epsilon),        # log(z_extent)
             rows,                         # number of φ rows
             mult,                         # multiplicity
             math.log(edep + epsilon),     # log(energy deposition)
-            cos                           # cos(θ)
+            cos,                          # cos(θ)
+            cross_B                       # cross_B
         )
     
     sig = [(1, transform(row)) for row in signal_data]
@@ -786,3 +796,240 @@ def plot_feature_importance(importances, feature_names, outdir=".", filename="fe
     fig.tight_layout()
     plt.savefig(os.path.join(outdir, f"{filename}.png"), dpi=300)
     plt.close()
+
+#===========================================================================================
+
+class ParticleClassifier(nn.Module):
+    def __init__(self, input_dim):
+        super().__init__()
+        
+        self.net = nn.Sequential(
+            nn.Linear(input_dim, 32),
+            nn.BatchNorm1d(32),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            
+            nn.Linear(32, 16),
+            nn.BatchNorm1d(16),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            
+            nn.Linear(16, 8),
+            nn.ReLU(),
+            
+            nn.Linear(8, 1),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
+def train_neural_network(
+    model,
+    train_loader,
+    valid_loader,
+    num_epochs=50,
+    lr = 0.01,
+    save_path = 'Classification_AB/NeuralNetwork/best_model.pth',
+    patience=5,
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'):
+    
+    model = model.to(device)
+    criterion = nn.BCELoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+
+    train_loss_history = []
+    val_loss_history = []
+
+    print(f"🚀 Training on {device} for {num_epochs} epochs with patience={patience}")
+
+    best_val_loss = float('inf')
+    epochs_no_improve = 0
+
+    for epoch in range(num_epochs):
+        model.train()
+        train_loss = 0.0
+
+        pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs} [Train]", unit="batch")
+
+        for xb, yb in pbar:
+            xb, yb = xb.to(device), yb.to(device)
+
+            optimizer.zero_grad()
+            outputs = model(xb)
+            loss = criterion(outputs, yb)
+
+            loss.backward()
+            optimizer.step()
+
+            train_loss += loss.item()
+            pbar.set_postfix({'batch_loss': loss.item()})
+        
+        avg_train_loss = train_loss / len(train_loader)
+        train_loss_history.append(avg_train_loss)
+
+        val_loss = 0.0
+        model.eval()
+        with torch.no_grad():
+            for xb, yb in valid_loader:
+                xb, yb = xb.to(device), yb.to(device)
+                outputs = model(xb)
+                loss = criterion(outputs, yb)
+                val_loss += loss.item()
+
+        avg_val_loss = val_loss / len(valid_loader)
+        val_loss_history.append(avg_val_loss)
+
+        print(f"Epoch {epoch+1}/{num_epochs} - Train Loss: {avg_train_loss:.4f} - Val Loss: {avg_val_loss:.4f}")
+
+        # -----------------------------
+        #     Early Stopping Logic
+        # -----------------------------
+        if avg_val_loss < best_val_loss:
+            best_val_loss = avg_val_loss
+            patience_counter = 0
+
+            # Save model
+            torch.save(model.state_dict(), save_path)
+            print(f"💾 Saved new best model to {save_path} (val_loss={best_val_loss:.4f})")
+        else:
+            patience_counter += 1
+            print(f"⚠ No improvement ({patience_counter}/{patience})")
+
+            if patience_counter >= patience:
+                print("⛔ Early stopping triggered!")
+                break
+    
+    print("🎉 Training completed!")
+    print(f"🏆 Best validation loss = {best_val_loss:.4f}")
+
+    return train_loss_history, val_loss_history
+
+def evaluate_model(
+    checkpoint_path,
+    model_class,
+    input_dim,
+    test_loader,
+    device="cuda" if torch.cuda.is_available() else "cpu",
+    save_dir="/home/submit/haoyun22/FCC-Beam-Background/Classification_AB/NeuralNetwork/Evaluation_NN"
+):
+    """
+    Evaluate a saved PyTorch classifier.
+    
+    checkpoint_path: path to saved .pt model
+    model_class: your model class, e.g. ParticleClassifier
+    input_dim: feature dimension
+    test_loader: DataLoader for evaluation
+    device: "cuda" or "cpu"
+    save_dir: folder to save roc.png etc.
+    """
+
+    # -----------------------------
+    # Load best model
+    # -----------------------------
+    model = model_class(input_dim)
+    model.load_state_dict(torch.load(checkpoint_path, map_location=device))
+    model.to(device)
+    model.eval()
+
+    print(f"Loaded best model from {checkpoint_path}")
+    print("Evaluating on device:", device)
+
+    # -----------------------------
+    # Run inference
+    # -----------------------------
+    y_true = []
+    y_scores = []
+
+    with torch.no_grad():
+        for xb, yb in test_loader:
+            xb = xb.to(device)
+
+            prob = model(xb).cpu().numpy().flatten()
+            y_scores.extend(prob)
+            y_true.extend(yb.numpy().flatten())
+
+    y_true = np.array(y_true)
+    y_scores = np.array(y_scores)
+    y_pred = (y_scores > 0.5).astype(int)
+
+    # -----------------------------
+    # Metrics
+    # -----------------------------
+    auc = roc_auc_score(y_true, y_scores)
+    print(f"\n🔥 ROC AUC = {auc:.4f}")
+
+    print("\n📌 Confusion Matrix:")
+    cm = confusion_matrix(y_true, y_pred)
+    print(cm)
+
+    print("\n📌 Classification Report:")
+    print(classification_report(y_true, y_pred))
+
+    # -----------------------------
+    # ROC curve
+    # -----------------------------
+    fpr, tpr, _ = roc_curve(y_true, y_scores)
+
+    os.makedirs(save_dir, exist_ok=True)
+    roc_path = os.path.join(save_dir, "roc_curve_nn.png")
+
+    plt.figure()
+    plt.plot(fpr, tpr, label=f"AUC = {auc:.4f}")
+    plt.plot([0,1], [0,1], '--')
+    plt.xlabel("False Positive Rate")
+    plt.ylabel("True Positive Rate")
+    plt.title("Neural Network ROC Curve")
+    plt.legend()
+    plt.savefig(roc_path)
+    plt.close()
+
+    print(f"\n📁 ROC curve saved to: {roc_path}")
+
+    return {
+        "auc": auc,
+        "y_true": y_true,
+        "y_scores": y_scores,
+        "y_pred": y_pred,
+        "confusion_matrix": cm
+    }
+
+def print_evaluation_report(results):
+    """
+    Pretty-print an evaluation report from the results dict.
+    """
+    auc = results["auc"]
+    cm = results["confusion_matrix"]
+    y_true = results["y_true"]
+    y_pred = results["y_pred"]
+
+    print("\n" + "="*50)
+    print("📊  Neural Network Evaluation Report")
+    print("="*50)
+
+    # AUC
+    print(f"\n🔥 ROC AUC: {auc:.4f}")
+
+    # Confusion Matrix
+    print("\n📌 Confusion Matrix:")
+    print(cm)
+
+    # Classification Report
+    print("\n📌 Classification Report:")
+    print(classification_report(y_true, y_pred))
+
+    # Extra stats
+    tn, fp, fn, tp = cm.ravel()
+    acc = (tp + tn) / (tp + tn + fp + fn)
+    precision = tp / (tp + fp + 1e-12)
+    recall = tp / (tp + fn + 1e-12)
+    f1 = 2 * precision * recall / (precision + recall + 1e-12)
+
+    print("="*50)
+    print("Additional Statistics")
+    print("="*50)
+    print(f"Accuracy:   {acc:.4f}")
+    print(f"Precision:  {precision:.4f}")
+    print(f"Recall:     {recall:.4f}")
+    print(f"F1-score:   {f1:.4f}")
+    print("="*50)

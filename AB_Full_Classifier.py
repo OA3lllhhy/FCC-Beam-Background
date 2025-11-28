@@ -18,6 +18,8 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--run', action='store_true', help='Process and save muon, signal, and background files')
 parser.add_argument('--plots', action='store_true', help='Plots')
 parser.add_argument('--classify', action='store_true', help='Train and evaluate a classifier')
+parser.add_argument('--grids', action ='store_true', help='Hyperparameter grid search for classifier')
+parser.add_argument('--neural', action ='store_true', help='Neural Network Classifier')
 args = parser.parse_args()
 
 # === Geometry config ===
@@ -30,15 +32,15 @@ TARGET_LAYER = 0
     all_configs = {
         'muons': {
             'files': glob.glob('/ceph/submit/data/user/j/jaeyserm/fccee/beam_backgrounds/CLD_o2_v05/mu_theta_0-180_p_50/*.root'),
-            'outfile': 'ABmuons_edep.pkl'
+            'outfile': 'ABmuons_edep_crossB.pkl'
         },
         'signal': {
             'files': glob.glob('/ceph/submit/data/group/fcc/ee/detector/VTXStudiesFullSim/CLD_wz3p6_ee_qq_ecm91p2/*.root'),
-            'outfile': 'ABsignal_edep.pkl'
+            'outfile': 'ABsignal_edep_crossB.pkl'
         },
         'background': {
             'files': glob.glob('/ceph/submit/data/group/fcc/ee/detector/VTXStudiesFullSim/CLD_o2_v05/FCCee_Z_4IP_04may23_FCCee_Z/*.root'),
-            'outfile': 'ABbkg_edep.pkl'
+            'outfile': 'ABbkg_edep_crossB.pkl'
         }
     }
 
@@ -135,15 +137,15 @@ if args.run:
     all_configs = {
         'muons': {
             'files': glob.glob('/ceph/submit/data/user/j/jaeyserm/fccee/beam_backgrounds/CLD_o2_v05/mu_theta_0-180_p_50/*.root'),
-            'outfile': 'ABmuons_edep.pkl'
+            'outfile': 'ABmuons_edep_xB_label_v2.pkl'
         },
         'signal': {
             'files': glob.glob('/ceph/submit/data/group/fcc/ee/detector/VTXStudiesFullSim/CLD_wz3p6_ee_qq_ecm91p2/*.root'),
-            'outfile': 'ABsignal_edep.pkl'
+            'outfile': 'ABsignal_edep_xB_label_v2.pkl'
         },
         'background': {
             'files': glob.glob('/ceph/submit/data/group/fcc/ee/detector/VTXStudiesFullSim/CLD_o2_v05/FCCee_Z_4IP_04may23_FCCee_Z/*.root'),
-            'outfile': 'ABbkg_edep.pkl'
+            'outfile': 'ABbkg_edep_xB_label_v2.pkl'
         }
     }
 
@@ -215,22 +217,28 @@ if args.run:
                     cos_theta = functions.cos_theta(b_x, b_y, b_z)
                     mc_energy = p.hits[0].energy
                     # z_ext = p.z_extent()
+                    
+                    
                     # Compute barycenter first
                     b_x, b_y, b_z = functions.geometric_baricenter(p.hits)
                     # Conservative Δz (actual hits)
                     z_ext_raw = p.z_extent()
                     # Optimistic geometric Δz
                     z_ext_opt = functions.analytic_delta_z(p.hits, b_x, b_y, b_z)
-                    # Final Δz used for classifier:
-                    # If optimistic formula available, use it.
+
                     if z_ext_opt is not None:
                         z_ext = z_ext_opt
                     else:
                         z_ext = z_ext_raw
 
+                    if functions.discard_AB(pos):
+                        cross_B = 1
+                    else:
+                        cross_B = 0
+                    
                     nrows = p.n_phi_rows(PITCH, RADIUS)
 
-                    cluster_metrics.append((z_ext, nrows, multiplicity, total_edep, mc_energy, cos_theta, b_x, b_y, pid))
+                    cluster_metrics.append((z_ext, nrows, multiplicity, total_edep, mc_energy, cos_theta, b_x, b_y, pid, cross_B))
 
         with open(outfile, 'wb') as f:
             pickle.dump(cluster_metrics, f)
@@ -406,11 +414,11 @@ if args.classify:
     random.seed(42)
 
     # === Load data ===
-    with open('ABmuons_edep.pkl', 'rb') as f:
+    with open('ABmuons_edep_xB_label_v2.pkl', 'rb') as f: # ABmuons_edep_xB_label.pkl
         muons = pickle.load(f)
-    with open('ABsignal_edep.pkl', 'rb') as f:
+    with open('ABsignal_edep_xB_label_v2.pkl', 'rb') as f: # ABsignal_edep_xB_label.pkl
         signal = pickle.load(f)
-    with open('ABbkg_edep.pkl', 'rb') as f:
+    with open('ABbkg_edep_xB_label_v2.pkl', 'rb') as f: # ABbkg_edep_xB_label.pkl
         background = pickle.load(f)
 
     # === Reassign noise-like clusters to background ===
@@ -490,10 +498,10 @@ if args.classify:
         plt.axvline(best_thresh, color='g', linestyle='--', label=f'TPR ≥ {target_tpr*100:.0f}% @ {best_thresh:.3f}')
     plt.xlabel("Threshold")
     plt.ylabel("Metric Value")
-    plt.title("Threshold Sweep — TPR, FPR")
+    plt.title("Threshold Sweep — TPR, FPR (xB Dataset)")
     plt.legend(loc='best')
     plt.grid(True)
-    #plt.savefig(os.path.join(outdir, "threshold_sweep_metrics.png"))
+    plt.savefig(os.path.join(outdir, "threshold_sweep_metrics_xB_label_v2.png"))
     plt.close()
 
     fpr, tpr, _ = roc_curve(y_test, y_proba)
@@ -502,10 +510,10 @@ if args.classify:
     plt.plot([0, 1], [0, 1], 'k--', alpha=0.5)
     plt.xlabel("False Positive Rate")
     plt.ylabel("True Positive Rate")
-    plt.title("ROC Curve — Final XGBoost Classifier")
+    plt.title("ROC Curve — Final XGBoost Classifier (xB Dataset)")
     plt.legend()
     plt.grid(True)
-    #plt.savefig(os.path.join(outdir, "presentation_ROC_curve.png"))
+    plt.savefig(os.path.join(outdir, "presentation_ROC_curve_xB_label_v2.png"))
     plt.close()
 
     ConfusionMatrixDisplay.from_predictions(
@@ -514,8 +522,8 @@ if args.classify:
         cmap="Blues",
         values_format='d'
     )
-    plt.title(f"Confusion Matrix @ Threshold = {best_thresh:.4f}")
-    #plt.savefig(os.path.join(outdir, "presentation_confusion_matrix.png"))
+    plt.title(f"Confusion Matrix @ Threshold = {best_thresh:.4f} xB Dataset")
+    plt.savefig(os.path.join(outdir, "presentation_confusion_matrix_xB_label_v2.png"))
     plt.close()
     
     functions.plot_feature_importance(
@@ -525,9 +533,216 @@ if args.classify:
         r"$\varphi$ extent",
         r"multiplicity",
         r"$\log(E_{\mathrm{dep}})$",
-        r"$\cos\theta$"
+        r"$\cos\theta$",
+        r"cross B boolean label"
     ],
     outdir="Classification_AB",
-    filename="feature_importance",
+    filename="feature_importance_xB_label_data_v2",
     sort=True
 )
+    
+if args.grids:
+    '''
+    Hyperparameter grid search for XGBoost classifier on AB dataset
+    1. Define parameter grid
+    2. Iterate over combinations
+    3. Train and evaluate model
+    4. Record results
+    5. Identify best parameters
+    6. Save results to file
+    7. Print best parameters and score
+    8. (Optional) Visualize results
+    '''
+    import xgboost as xgb
+    from sklearn.model_selection import train_test_split
+    from sklearn.metrics import roc_auc_score
+    import itertools
+    import pandas as pd
+    import matplotlib.pyplot as plt
+    import pickle
+    import os
+    import random
+    from functions import relabel_noise_clusters, get_features_and_labels
+
+    outdir = 'Classification_AB/GridSearch'
+    os.makedirs(outdir, exist_ok=True)
+    random.seed(42)
+
+    # === Load data ===
+    with open('ABmuons_edep_xB_label_v2.pkl', 'rb') as f: # ABmuons_edep_xB_label.pkl
+        muons = pickle.load(f)
+    with open('ABsignal_edep_xB_label_v2.pkl', 'rb') as f: # ABsignal_edep_xB_label.pkl
+        signal = pickle.load(f)
+    with open('ABbkg_edep_xB_label_v2.pkl', 'rb') as f: # ABbkg_edep_xB_label.pkl
+        background = pickle.load(f)
+
+    # === Reassign noise-like clusters to background ===
+    noise_pids = {11, -11, 13, -211, 22, 211, 2212, -2212}
+    energy_cut = 0.01
+    clean_muons, reassigned_muons = relabel_noise_clusters(muons, noise_pids, energy_cut)
+    clean_signal, reassigned_signal = relabel_noise_clusters(signal, noise_pids, energy_cut)
+
+    all_background = background + reassigned_muons + reassigned_signal
+    all_signal = clean_muons + clean_signal
+    sampled_signal = random.sample(all_signal, len(all_background))
+
+    print(f"Clean muons: {len(clean_muons)}")
+    print(f"Clean signal: {len(clean_signal)}")
+    print(f"Reassigned to background: {len(reassigned_muons) + len(reassigned_signal)}")
+
+    # === Feature extraction and split ===
+    X, y = get_features_and_labels(sampled_signal, all_background)
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+    # === Define hyperparameter grid ===
+    param_grid = {
+        'n_estimators': [50, 100, 150, 200, 250, 300],
+        'learning_rate': [0.01, 0.1],
+        'max_depth': [6, 8, 10, 12],
+        'scale_pos_weight': [0.4, 0.5, 0.6]
+    }
+
+    # === Grid search ===
+    # save ROC AUC scores for each param combination
+    results = []
+    for n_estimators, learning_rate, max_depth, scale_pos_weight in itertools.product(
+        param_grid['n_estimators'],
+        param_grid['learning_rate'],
+        param_grid['max_depth'],
+        param_grid['scale_pos_weight']
+    ):
+        clf = xgb.XGBClassifier(
+            use_label_encoder=False,
+            eval_metric='logloss',
+            n_estimators=n_estimators,
+            learning_rate=learning_rate,
+            max_depth=max_depth,
+            scale_pos_weight=scale_pos_weight,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            random_state=42
+        )
+        clf.fit(X_train, y_train)
+        y_proba = clf.predict_proba(X_test)[:, 1]
+        auc = roc_auc_score(y_test, y_proba)
+
+        results.append({
+            'n_estimators': n_estimators,
+            'learning_rate': learning_rate,
+            'max_depth': max_depth,
+            'scale_pos_weight': scale_pos_weight,
+            'roc_auc': auc
+        })
+        print(f"Tested params: n_estimators={n_estimators}, learning_rate={learning_rate}, max_depth={max_depth}, scale_pos_weight={scale_pos_weight} => ROC AUC: {auc:.4f}")
+
+    # === Identify best parameters ===
+    results_df = pd.DataFrame(results)
+    best_row = results_df.loc[results_df['roc_auc'].idxmax()]
+    best_params = {
+        'n_estimators': best_row['n_estimators'],
+        'learning_rate': best_row['learning_rate'],
+        'max_depth': best_row['max_depth'],
+        'scale_pos_weight': best_row['scale_pos_weight']
+    }
+    best_score = best_row['roc_auc']
+
+    print("\n=== Grid Search Complete ===")
+    print(f"Best Parameters: {best_params}")
+    print(f"Best ROC AUC Score: {best_score:.4f}")
+
+if args.neural:
+    from tqdm import tqdm
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+    from torch.utils.data import DataLoader, TensorDataset
+    from sklearn.model_selection import train_test_split
+    from sklearn.metrics import (
+        classification_report,
+        confusion_matrix,
+        roc_auc_score,
+        precision_recall_fscore_support,
+        roc_curve,
+        ConfusionMatrixDisplay
+    )
+    import matplotlib.pyplot as plt
+    import numpy as np
+    import pickle
+    import os
+    import random
+    from functions import relabel_noise_clusters, get_features_and_labels, train_neural_network, evaluate_model, print_evaluation_report
+    from functions import ParticleClassifier
+
+    import sys
+    sys.modules['onnx'] = None
+    sys.modules['onnxruntime'] = None
+
+
+    os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python"
+    os.environ["TORCH_DISABLE_CPP_PROTOS"] = "1"
+    os.environ["TORCH_USE_RTLD_GLOBAL"] = "0"
+
+    outdir = 'Classification_AB/GridSearch'
+    os.makedirs(outdir, exist_ok=True)
+    random.seed(42)
+
+    # === Load data ===
+    with open('ABmuons_edep_xB_label_v2.pkl', 'rb') as f: # ABmuons_edep_xB_label.pkl
+        muons = pickle.load(f)
+    with open('ABsignal_edep_xB_label_v2.pkl', 'rb') as f: # ABsignal_edep_xB_label.pkl
+        signal = pickle.load(f)
+    with open('ABbkg_edep_xB_label_v2.pkl', 'rb') as f: # ABbkg_edep_xB_label.pkl
+        background = pickle.load(f)
+
+    # === Reassign noise-like clusters to background ===
+    noise_pids = {11, -11, 13, -211, 22, 211, 2212, -2212}
+    energy_cut = 0.01
+    clean_muons, reassigned_muons = relabel_noise_clusters(muons, noise_pids, energy_cut)
+    clean_signal, reassigned_signal = relabel_noise_clusters(signal, noise_pids, energy_cut)
+
+    all_background = background + reassigned_muons + reassigned_signal
+    all_signal = clean_muons + clean_signal
+    sampled_signal = random.sample(all_signal, len(all_background))
+
+    print(f"Clean muons: {len(clean_muons)}")
+    print(f"Clean signal: {len(clean_signal)}")
+    print(f"Reassigned to background: {len(reassigned_muons) + len(reassigned_signal)}")
+        
+    # === Feature extraction and split ===
+    features, labels = get_features_and_labels(sampled_signal, all_background)
+
+    # Convert numpy to torch
+    X = torch.tensor(features, dtype=torch.float32)
+    y = torch.tensor(labels, dtype=torch.float32).unsqueeze(1)  # (N,1)
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, shuffle=True)
+
+    train_ds = TensorDataset(X_train, y_train)
+    test_ds = TensorDataset(X_test, y_test)
+
+    train_loader = DataLoader(train_ds, batch_size=128, shuffle=True)
+    test_loader = DataLoader(test_ds, batch_size=128, shuffle=False)
+
+    # === Model, loss, optimizer ===
+    input_dim = X.shape[1]
+    model = ParticleClassifier(input_dim)
+    criterion = nn.BCELoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+
+    # === Train model ===
+    train_loss, test_loss = train_neural_network(
+        model,
+        train_loader,
+        test_loader
+    )
+    # === Evaluate model ===
+    results = evaluate_model(
+        checkpoint_path="best_model.pt",
+        model_class=ParticleClassifier,
+        input_dim=input_dim,
+        test_loader=test_loader,
+        save_dir="Classification_AB/NeuralNetwork/Evaluation_NN"
+    )
+
+    # === Model Summary Report ===
+    print_evaluation_report(results)
+    
