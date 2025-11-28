@@ -21,7 +21,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import (
     roc_auc_score, roc_curve, confusion_matrix,
-    classification_report
+    classification_report, precision_recall_curve, precision_recall_fscore_support, ConfusionMatrixDisplay
 )
 
 hep.style.use(hep.style.ROOT)
@@ -850,9 +850,7 @@ def train_neural_network(
         model.train()
         train_loss = 0.0
 
-        pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs} [Train]", unit="batch")
-
-        for xb, yb in pbar:
+        for xb, yb in train_loader:
             xb, yb = xb.to(device), yb.to(device)
 
             optimizer.zero_grad()
@@ -863,7 +861,6 @@ def train_neural_network(
             optimizer.step()
 
             train_loss += loss.item()
-            pbar.set_postfix({'batch_loss': loss.item()})
         
         avg_train_loss = train_loss / len(train_loader)
         train_loss_history.append(avg_train_loss)
@@ -911,7 +908,9 @@ def evaluate_model(
     input_dim,
     test_loader,
     device="cuda" if torch.cuda.is_available() else "cpu",
-    save_dir="/home/submit/haoyun22/FCC-Beam-Background/Classification_AB/NeuralNetwork/Evaluation_NN"
+    save_dir="/work/submit/haoyun22/FCC-Beam-Background/Classification_AB/NeuralNetwork/Evaluation_NN/roc_plots",
+    threshold_plot_dir="/work/submit/haoyun22/FCC-Beam-Background/Classification_AB/NeuralNetwork/Evaluation_NN/threshold_plots",
+    cm_path="/work/submit/haoyun22/FCC-Beam-Background/Classification_AB/NeuralNetwork/Evaluation_NN/confusion_matrix"
 ):
     """
     Evaluate a saved PyTorch classifier.
@@ -922,6 +921,7 @@ def evaluate_model(
     test_loader: DataLoader for evaluation
     device: "cuda" or "cpu"
     save_dir: folder to save roc.png etc.
+    threshold_plot_dir: folder to save threshold sweep plots
     """
 
     # -----------------------------
@@ -957,14 +957,14 @@ def evaluate_model(
     # Metrics
     # -----------------------------
     auc = roc_auc_score(y_true, y_scores)
-    print(f"\n🔥 ROC AUC = {auc:.4f}")
+    # print(f"\n🔥 ROC AUC = {auc:.4f}")
 
     print("\n📌 Confusion Matrix:")
     cm = confusion_matrix(y_true, y_pred)
-    print(cm)
+    # print(cm)
 
-    print("\n📌 Classification Report:")
-    print(classification_report(y_true, y_pred))
+    # print("\n📌 Classification Report:")
+    # print(classification_report(y_true, y_pred))
 
     # -----------------------------
     # ROC curve
@@ -981,10 +981,70 @@ def evaluate_model(
     plt.ylabel("True Positive Rate")
     plt.title("Neural Network ROC Curve")
     plt.legend()
+    plt.grid()
     plt.savefig(roc_path)
     plt.close()
 
     print(f"\n📁 ROC curve saved to: {roc_path}")
+
+    # -----------------------------
+    # Sweep thresholds to find one that preserves >= 99% signal efficiency
+    # -----------------------------
+    thresholds = np.linspace(0, 1, 500)
+    tpr_list, fpr_list, f1_list = [], [], []
+
+    for thresh in thresholds:
+        y_pred_thresh = (y_scores >= thresh).astype(int)
+        TP = np.sum((y_true == 1) & (y_pred_thresh == 1))
+        FP = np.sum((y_true == 0) & (y_pred_thresh == 1))
+        FN = np.sum((y_true == 1) & (y_pred_thresh == 0))
+        TN = np.sum((y_true == 0) & (y_pred_thresh == 0))
+
+        tpr = TP / (TP + FN) if (TP + FN) > 0 else 0.0
+        fpr = FP / (FP + TN) if (FP + TN) > 0 else 0.0
+        precision, recall, f1, _ = precision_recall_fscore_support(y_true, y_pred_thresh, average='binary', zero_division=0)
+        tpr_list.append(tpr)
+        fpr_list.append(fpr)
+        f1_list.append(f1)
+
+    target_tpr = 0.99
+    best_thresh, best_fpr = None, 1.0
+    for thresh, tpr, fpr in zip(thresholds, tpr_list, fpr_list):
+        if tpr >= target_tpr and fpr < best_fpr:
+            best_fpr, best_thresh = fpr, thresh
+
+    if best_thresh is not None:
+        print(f"Threshold for ≥{target_tpr*100:.1f}% signal retention: {best_thresh:.4f}")
+        print(f"Background rejection at that threshold: {1 - best_fpr:.4f}")
+    else:
+        print(f"No threshold found that satisfies TPR ≥ {target_tpr*100:.1f}%")
+
+    y_pred = (y_scores >= best_thresh).astype(int)
+
+    os.makedirs(threshold_plot_dir, exist_ok=True)
+    threshold_plot = os.path.join(threshold_plot_dir, "threshold_sweep_plot.png")
+
+    plt.plot(thresholds, tpr_list, label='TPR (Signal Retention)')
+    plt.plot(thresholds, fpr_list, label='FPR (Background Acceptance)')
+    if best_thresh is not None:
+        plt.axvline(best_thresh, color='g', linestyle='--', label=f'TPR ≥ {target_tpr*100:.0f}% @ {best_thresh:.3f}')
+    plt.xlabel("Threshold")
+    plt.ylabel("Metric Value")
+    plt.title("Threshold Sweep — TPR, FPR")
+    plt.legend(loc='best')
+    plt.grid(True)
+    plt.savefig(threshold_plot)
+    plt.close()
+
+    print(f"📁 Threshold sweep plot saved to: {threshold_plot}")
+
+    ConfusionMatrixDisplay.from_predictions(y_true, y_pred, display_labels=["Background", "Signal"],cmap="Blues",values_format='d')
+    os.makedirs(cm_path, exist_ok=True)
+    cm_plot_path = os.path.join(cm_path, "confusion_matrix_nn.png")
+    plt.title("Neural Network Confusion Matrix")
+    plt.savefig(cm_plot_path)
+    plt.close()
+    print(f"📁 Confusion matrix plot saved to: {cm_plot_path}")
 
     return {
         "auc": auc,

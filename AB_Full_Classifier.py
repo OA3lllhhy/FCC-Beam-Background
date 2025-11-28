@@ -414,11 +414,11 @@ if args.classify:
     random.seed(42)
 
     # === Load data ===
-    with open('ABmuons_edep_xB_label_v2.pkl', 'rb') as f: # ABmuons_edep_xB_label.pkl
+    with open('/ceph/submit/data/user/h/haoyun22/process_data_FCC_background/ABmuons_edep_xB_label_v2.pkl', 'rb') as f: # ABmuons_edep_xB_label.pkl
         muons = pickle.load(f)
-    with open('ABsignal_edep_xB_label_v2.pkl', 'rb') as f: # ABsignal_edep_xB_label.pkl
+    with open('/ceph/submit/data/user/h/haoyun22/process_data_FCC_background/ABsignal_edep_xB_label_v2.pkl', 'rb') as f: # ABsignal_edep_xB_label.pkl
         signal = pickle.load(f)
-    with open('ABbkg_edep_xB_label_v2.pkl', 'rb') as f: # ABbkg_edep_xB_label.pkl
+    with open('/ceph/submit/data/user/h/haoyun22/process_data_FCC_background/ABbkg_edep_xB_label_v2.pkl', 'rb') as f: # ABbkg_edep_xB_label.pkl
         background = pickle.load(f)
 
     # === Reassign noise-like clusters to background ===
@@ -687,11 +687,11 @@ if args.neural:
     random.seed(42)
 
     # === Load data ===
-    with open('ABmuons_edep_xB_label_v2.pkl', 'rb') as f: # ABmuons_edep_xB_label.pkl
+    with open('/ceph/submit/data/user/h/haoyun22/process_data_FCC_background/ABmuons_edep_xB_label_v2.pkl', 'rb') as f: # ABmuons_edep_xB_label.pkl
         muons = pickle.load(f)
-    with open('ABsignal_edep_xB_label_v2.pkl', 'rb') as f: # ABsignal_edep_xB_label.pkl
+    with open('/ceph/submit/data/user/h/haoyun22/process_data_FCC_background/ABsignal_edep_xB_label_v2.pkl', 'rb') as f: # ABsignal_edep_xB_label.pkl
         signal = pickle.load(f)
-    with open('ABbkg_edep_xB_label_v2.pkl', 'rb') as f: # ABbkg_edep_xB_label.pkl
+    with open('/ceph/submit/data/user/h/haoyun22/process_data_FCC_background/ABbkg_edep_xB_label_v2.pkl', 'rb') as f: # ABbkg_edep_xB_label.pkl
         background = pickle.load(f)
 
     # === Reassign noise-like clusters to background ===
@@ -729,18 +729,20 @@ if args.neural:
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
     # === Train model ===
-    train_loss, test_loss = train_neural_network(
-        model,
-        train_loader,
-        test_loader
-    )
+    # train_loss, test_loss = train_neural_network(
+    #     model,
+    #     train_loader,
+    #     test_loader
+    # )
     # === Evaluate model ===
     results = evaluate_model(
-        checkpoint_path="best_model.pt",
+        checkpoint_path="/work/submit/haoyun22/FCC-Beam-Background/Classification_AB/NeuralNetwork/best_model.pth",
         model_class=ParticleClassifier,
         input_dim=input_dim,
         test_loader=test_loader,
-        save_dir="Classification_AB/NeuralNetwork/Evaluation_NN"
+        save_dir="Classification_AB/NeuralNetwork/Evaluation_NN/ROC_Curves",
+        threshold_plot_dir="Classification_AB/NeuralNetwork/Evaluation_NN/Threshold_Plots",
+        cm_path="Classification_AB/NeuralNetwork/Evaluation_NN/Confusion_Matrix.png"
     )
 
     # === Model Summary Report ===
