@@ -1,5 +1,7 @@
 *.pkl*.pkl
-FCCBeam*/*
+FCC*/*
+FCC
+logs
 logs/*
 event_display/*
 cluster_hitmaps_centered/*
@@ -7,6 +9,8 @@ vtx_comparison_plots/*
 Classification_AB/*
 AB_Full_Classifier_outputs/*
 cnn_output/*
+cnn_output
+CNN_AB
 CNN_AB/*
 CNN_balance.py
 CNN_method.py
@@ -16,3 +20,6 @@ data.py
 patch_maker_copy.py
 patch_maker.py
 __pycache__/*
+CNN_AB_new/repeat_results*
+NN_test
+ROOT_tutorial
